@@ -184,7 +184,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v2.0</span>
+                <span class="version-tag">v2.1</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -203,7 +203,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.0.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.1.0</p>
         </div>
     </div>
 
@@ -313,7 +313,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 2.0).");
+            log("UI Engine Ready (Build 2.1).");
 
             try {
                 const results = await Promise.all([
@@ -369,6 +369,7 @@
             try {
                 if (typeof V86Class !== 'function') throw new Error("V86 object is not a constructor.");
 
+                // Removed 'serial_container_xtermjs' to avoid conflict with xterm v5+
                 emulator = new V86Class({
                     wasm_path: REQUIRED_FILES.WASM,
                     memory_size: 256 * 1024 * 1024,
@@ -376,17 +377,15 @@
                     bios: { url: REQUIRED_FILES.BIOS },
                     cdrom: { url: REQUIRED_FILES.ISO },
                     autostart: true,
-                    disable_mouse: false,
-                    serial_container_xtermjs: term // Attempt direct xterm binding if supported
+                    disable_mouse: false
+                    // Manual pipe handling is established below
                 });
 
-                log("Emulator Constructed.");
+                log("Emulator Constructed (Manual Bridge).");
 
                 // LISTENERS
                 emulator.add_listener("download-progress", (e) => {
                     const prog = e.file_index / e.file_count;
-                    // Approximate progress based on files
-                    // Ideally check bytes, but file count is standard v86 event
                     log(`Loading file ${e.file_index + 1}/${e.file_count}`);
                 });
 
