@@ -10,8 +10,8 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Emulator Engine -->
-    <script src="./libv86.js"></script>
+    <!-- Emulator Engine - Using defer to ensure DOM is ready but global is set before init -->
+    <script src="./libv86.js" defer></script>
 
     <style>
         :root {
@@ -158,7 +158,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.1</span>
+                <span class="version-tag">v1.2</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -173,7 +173,7 @@
         <div class="loader-box">
             <div class="spinner"></div>
             <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">INITIALIZING CORE...</p>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Build version: 1.1.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Build version: 1.2.0</p>
         </div>
     </div>
 
@@ -224,12 +224,13 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.1).");
+            log("UI Engine Ready (Build 1.2).");
 
             try {
                 log("Verifying Emulator Library...");
                 
                 const findV86 = () => {
+                    // Modern environment global check
                     if (typeof window.V86Starter !== 'undefined') return window.V86Starter;
                     if (typeof V86Starter !== 'undefined') return V86Starter;
                     return null;
@@ -237,17 +238,19 @@
 
                 let v86Class = findV86();
 
-                // Wait up to 3 seconds for local script to register global variable
+                // Wait up to 10 seconds for local script to register global variable
+                // Some hosting environments have delayed execution for large JS files
                 if (!v86Class) {
-                    for (let i = 0; i < 30; i++) {
+                    for (let i = 0; i < 100; i++) {
                         v86Class = findV86();
                         if (v86Class) break;
                         await new Promise(r => setTimeout(r, 100));
+                        if (i % 10 === 0 && i > 0) log(`Verification retry: ${i/10}s...`);
                     }
                 }
 
                 if (!v86Class) {
-                    throw new Error("V86Starter not found. Verify libv86.js is at root.");
+                    throw new Error("V86Starter not found after 10s. The file './libv86.js' is either missing or blocked.");
                 }
 
                 log("Engine confirmed. Preparing Boot...");
@@ -257,7 +260,9 @@
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Check console for file load errors.");
+                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 1. Verify libv86.js is at repository root.");
+                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 2. Ensure the filename is exactly 'libv86.js' (case-sensitive).");
+                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 3. Check Network tab for 404 or MIME type errors.");
                 document.getElementById('boot-status').innerText = "BOOT FAILED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
