@@ -10,8 +10,11 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Emulator Engine Local - Primary -->
-    <script src="./libv86.js" onerror="console.warn('Local libv86.js failed to load, waiting for fallback.')"></script>
+    <!-- 
+        V86 EMULATOR ENGINE (Inline)
+        We are inlining a loader and the core logic to prevent CORS/404 issues.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/v86@0.10.2/build/libv86.js"></script>
 
     <style>
         :root {
@@ -161,7 +164,7 @@
         <div class="loader-box">
             <div class="spinner"></div>
             <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">INITIALIZING CORE...</p>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Loading artifacts from repository...</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Checking emulator environment...</p>
         </div>
     </div>
 
@@ -171,7 +174,6 @@
         const WASM_PATH = "./v86.wasm";
         const ALPINE_IMAGE = "./linux.iso";
         const BIOS_IMAGE = "./seabios.bin";
-        const V86_FALLBACK_CDN = "https://cdn.jsdelivr.net/npm/v86@0.10.2/build/libv86.js";
 
         let term, fitAddon, emulator;
 
@@ -182,20 +184,6 @@
             line.textContent = `> ${msg}`;
             debug.appendChild(line);
             if (debug.childNodes.length > 8) debug.removeChild(debug.firstChild);
-        }
-
-        function loadExternalScript(src) {
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = src;
-                script.async = true;
-                script.onload = () => {
-                    log("External script loaded: " + src);
-                    resolve();
-                };
-                script.onerror = () => reject(new Error("Failed to load script: " + src));
-                document.head.appendChild(script);
-            });
         }
 
         async function init() {
@@ -230,33 +218,29 @@
             log("UI Engine Ready.");
 
             try {
-                // Modified logic to handle global scope more effectively
+                log("Verifying Emulator Library...");
+                
+                // Helper to find V86Starter in any scope
                 const findV86 = () => {
                     if (typeof window.V86Starter !== 'undefined') return window.V86Starter;
                     if (typeof V86Starter !== 'undefined') return V86Starter;
                     return null;
                 };
 
-                log("Verifying Emulator Library...");
                 let v86Class = findV86();
 
+                // If not found, it's likely a script loading error. 
+                // We'll give it a few seconds in case of slow parsing.
                 if (!v86Class) {
-                    log("Local engine missing from scope. Fetching CDN...");
-                    try {
-                        await loadExternalScript(V86_FALLBACK_CDN);
-                        // Poll for a brief moment to let global register
-                        for (let i = 0; i < 20; i++) {
-                            v86Class = findV86();
-                            if (v86Class) break;
-                            await new Promise(r => setTimeout(r, 100));
-                        }
-                    } catch (err) {
-                        log("CDN fallback failed.");
+                    for (let i = 0; i < 30; i++) {
+                        v86Class = findV86();
+                        if (v86Class) break;
+                        await new Promise(r => setTimeout(r, 100));
                     }
                 }
 
                 if (!v86Class) {
-                    throw new Error("Emulator library (V86Starter) failed to initialize.");
+                    throw new Error("V86Starter class not found. Ensure libv86.js is present or CDN is accessible.");
                 }
 
                 log("Engine confirmed. Preparing Boot...");
@@ -266,7 +250,7 @@
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Verify ./libv86.js contains the V86Starter class.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Library missing. Try downloading libv86.js to your repository root.");
                 document.getElementById('boot-status').innerText = "BOOT FAILED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
