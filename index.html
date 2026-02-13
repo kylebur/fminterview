@@ -11,7 +11,7 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
     <!-- Emulator Engine Local - Primary -->
-    <script src="./libv86.js"></script>
+    <script src="./libv86.js" onerror="console.warn('Local libv86.js failed to load, waiting for fallback.')"></script>
 
     <style>
         :root {
@@ -189,8 +189,11 @@
                 const script = document.createElement('script');
                 script.src = src;
                 script.async = true;
-                script.onload = resolve;
-                script.onerror = reject;
+                script.onload = () => {
+                    log("External script loaded: " + src);
+                    resolve();
+                };
+                script.onerror = () => reject(new Error("Failed to load script: " + src));
                 document.head.appendChild(script);
             });
         }
@@ -227,81 +230,91 @@
             log("UI Engine Ready.");
 
             try {
-                const getStarter = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
-                
-                let attempts = 0;
-                log("Verifying local libv86.js...");
-                
-                const V86 = await new Promise(async (resolve, reject) => {
-                    const check = async () => {
-                        const s = getStarter();
-                        if (s) {
-                            resolve(s);
-                        } else if (attempts < 30) { // Try local for 3 seconds
-                            attempts++;
-                            setTimeout(check, 100);
-                        } else {
-                            log("Local engine failed. Trying CDN fallback...");
-                            try {
-                                await loadExternalScript(V86_FALLBACK_CDN);
-                                const fallbackS = getStarter();
-                                if (fallbackS) resolve(fallbackS);
-                                else reject(new Error("CDN fallback failed to register."));
-                            } catch (err) {
-                                reject(new Error("Both local and CDN engines failed to load."));
-                            }
+                // Modified logic to handle global scope more effectively
+                const findV86 = () => {
+                    if (typeof window.V86Starter !== 'undefined') return window.V86Starter;
+                    if (typeof V86Starter !== 'undefined') return V86Starter;
+                    return null;
+                };
+
+                log("Verifying Emulator Library...");
+                let v86Class = findV86();
+
+                if (!v86Class) {
+                    log("Local engine missing from scope. Fetching CDN...");
+                    try {
+                        await loadExternalScript(V86_FALLBACK_CDN);
+                        // Poll for a brief moment to let global register
+                        for (let i = 0; i < 20; i++) {
+                            v86Class = findV86();
+                            if (v86Class) break;
+                            await new Promise(r => setTimeout(r, 100));
                         }
-                    };
-                    check();
-                });
+                    } catch (err) {
+                        log("CDN fallback failed.");
+                    }
+                }
+
+                if (!v86Class) {
+                    throw new Error("Emulator library (V86Starter) failed to initialize.");
+                }
 
                 log("Engine confirmed. Preparing Boot...");
                 document.getElementById('boot-status').innerText = "PREPARING VIRTUAL MACHINE...";
-                bootVM(V86);
+                bootVM(v86Class);
 
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[TIP]\x1b[0m Ensure libv86.js is a valid script and not an HTML error page.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Verify ./libv86.js contains the V86Starter class.");
                 document.getElementById('boot-status').innerText = "BOOT FAILED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
         }
 
-        function bootVM(V86) {
+        function bootVM(V86Class) {
             log("Initializing V86 instance...");
             
-            emulator = new V86({
-                wasm_path: WASM_PATH,
-                memory_size: 256 * 1024 * 1024,
-                vga_as_text_mode: true,
-                bios: { url: BIOS_IMAGE },
-                cdrom: { url: ALPINE_IMAGE },
-                autostart: true,
-            });
+            try {
+                emulator = new V86Class({
+                    wasm_path: WASM_PATH,
+                    memory_size: 256 * 1024 * 1024,
+                    vga_as_text_mode: true,
+                    bios: { url: BIOS_IMAGE },
+                    cdrom: { url: ALPINE_IMAGE },
+                    autostart: true,
+                });
 
-            const dot = document.getElementById('connection-dot');
-            const label = document.getElementById('system-label');
+                const dot = document.getElementById('connection-dot');
+                const label = document.getElementById('system-label');
 
-            emulator.add_listener("serial0-output-char", (char) => {
-                const overlay = document.getElementById('overlay');
-                if (overlay && !overlay.classList.contains('hidden')) {
-                    overlay.classList.add('hidden');
-                    dot.classList.add('active');
-                    label.innerText = "SYSTEM ACTIVE";
-                    log("Serial link established.");
-                }
-                term.write(char);
-            });
+                emulator.add_listener("serial0-output-char", (char) => {
+                    const overlay = document.getElementById('overlay');
+                    if (overlay && !overlay.classList.contains('hidden')) {
+                        overlay.classList.add('hidden');
+                        dot.classList.add('active');
+                        label.innerText = "SYSTEM ACTIVE";
+                        log("Serial link established.");
+                    }
+                    term.write(char);
+                });
 
-            emulator.add_listener("download-error", (url) => {
-                log("Download failed: " + url);
-                term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m File not found or blocked: ${url}`);
-            });
+                emulator.add_listener("download-error", (url) => {
+                    log("Download failed: " + url);
+                    term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m File not found or blocked: ${url}`);
+                });
 
-            term.onData(data => emulator.serial0_send(data));
-            window.addEventListener('resize', () => fitAddon.fit());
-            term.focus();
+                term.onData(data => {
+                    if (emulator) emulator.serial0_send(data);
+                });
+
+                window.addEventListener('resize', () => fitAddon.fit());
+                term.focus();
+                
+            } catch (err) {
+                log("Constructor error: " + err.message);
+                term.writeln("\r\n\x1b[31m[CONSTRUCTOR_ERROR]\x1b[0m " + err.message);
+            }
         }
 
         window.onload = init;
