@@ -171,7 +171,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.4</span>
+                <span class="version-tag">v1.5</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -189,7 +189,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.4.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.5.0</p>
         </div>
     </div>
 
@@ -232,7 +232,7 @@
         async function checkFile(name, url) {
             updateDiagnostic(name, "CHECKING");
             try {
-                const response = await fetch(url, { method: 'GET' }); // Using GET to verify content
+                const response = await fetch(url, { method: 'GET' });
                 if (response.ok) {
                     const text = await response.text();
                     if (text.length < 100) {
@@ -251,22 +251,37 @@
             }
         }
 
+        /**
+         * Robust script loader using Blob and URL.createObjectURL
+         * This forces the browser to treat the fetched text as a discrete script file,
+         * which is highly effective for ensuring globals like V86Starter are registered.
+         */
         async function loadScriptRobustly(url) {
             updateDiagnostic("JS_LOAD", "FETCHING");
             try {
                 const response = await fetch(url);
                 const scriptText = await response.text();
                 
-                // We create a script tag and inject the text directly. 
-                // This bypasses many browser "nosniff" and module isolation issues.
-                const script = document.createElement('script');
-                script.text = scriptText;
-                document.head.appendChild(script);
+                const blob = new Blob([scriptText], { type: 'application/javascript' });
+                const blobUrl = URL.createObjectURL(blob);
                 
-                updateDiagnostic("JS_LOAD", "INJECTED");
-                return true;
+                return new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = blobUrl;
+                    script.onload = () => {
+                        URL.revokeObjectURL(blobUrl);
+                        updateDiagnostic("JS_LOAD", "EXECUTED");
+                        resolve(true);
+                    };
+                    script.onerror = () => {
+                        URL.revokeObjectURL(blobUrl);
+                        updateDiagnostic("JS_LOAD", "EXEC_FAIL", true);
+                        reject(new Error("Execution failure."));
+                    };
+                    document.head.appendChild(script);
+                });
             } catch (e) {
-                updateDiagnostic("JS_LOAD", "FAILED", true);
+                updateDiagnostic("JS_LOAD", "FETCH_FAIL", true);
                 return false;
             }
         }
@@ -300,7 +315,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.4).");
+            log("UI Engine Ready (Build 1.5).");
 
             try {
                 // 2. Pre-flight Check
@@ -315,7 +330,7 @@
                     throw new Error("One or more local files are missing or invalid.");
                 }
 
-                // 3. Load Engine via robust injection
+                // 3. Load Engine
                 await loadScriptRobustly(REQUIRED_FILES.LIBRARY);
 
                 log("Verifying Engine Scope...");
@@ -327,12 +342,13 @@
                         v86Class = findV86();
                         if (v86Class) break;
                         await new Promise(r => setTimeout(r, 100));
+                        if (i % 10 === 0 && i > 0) log(`Global check retry: ${i/10}s...`);
                     }
                 }
 
                 if (!v86Class) {
                     updateDiagnostic("ENGINE", "MISSING", true);
-                    throw new Error("JS Injected but V86Starter class not found in global scope.");
+                    throw new Error("V86Starter class not found in global scope after execution.");
                 }
                 updateDiagnostic("ENGINE", "READY");
 
@@ -343,7 +359,7 @@
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m If ENGINE is still MISSING, open libv86.js to ensure it's not an HTML page.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Check if your libv86.js starts with 'var V86Starter=...'.");
                 document.getElementById('boot-status').innerText = "STOPPED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
@@ -369,7 +385,7 @@
                         overlay.classList.add('hidden');
                         dot.classList.add('active');
                         label.innerText = "SYSTEM ACTIVE";
-                        log("First boot output received.");
+                        log("Serial stream established.");
                     }
                     term.write(char);
                 });
