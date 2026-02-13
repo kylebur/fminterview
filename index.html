@@ -18,6 +18,7 @@
             --text-muted: #565f89;
             --success-color: #9ce200;
             --error-color: #f7768e;
+            --warning-color: #e0af68;
         }
 
         body, html { 
@@ -169,16 +170,6 @@
             transition: width 0.2s;
         }
 
-        /* Hidden screen for VGA capture if needed */
-        #screen_container {
-            display: none; 
-            position: absolute; 
-            top: 0; 
-            left: 0;
-            white-space: pre;
-            font-family: monospace;
-        }
-
         .step-success { color: var(--success-color); }
         .step-fail { color: var(--error-color); }
     </style>
@@ -194,7 +185,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v2.2</span>
+                <span class="version-tag">v2.3</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -203,7 +194,6 @@
         </header>
 
         <div id="terminal-container"></div>
-        <div id="screen_container"></div>
     </div>
 
     <div id="overlay">
@@ -214,7 +204,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.2.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.3.0</p>
         </div>
     </div>
 
@@ -325,7 +315,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 2.2).");
+            log("UI Engine Ready (Build 2.3).");
 
             try {
                 const results = await Promise.all([
@@ -380,11 +370,12 @@
             try {
                 if (typeof V86Class !== 'function') throw new Error("V86 object is not a constructor.");
 
+                // Configuration updated for Build 2.3.0
                 emulator = new V86Class({
                     wasm_path: REQUIRED_FILES.WASM,
                     memory_size: 256 * 1024 * 1024,
-                    vga_as_text_mode: true,
-                    screen_container: document.getElementById('screen_container'), // Added screen container
+                    vga_as_text_mode: true, 
+                    // removed screen_container to prevent crash
                     bios: { url: REQUIRED_FILES.BIOS },
                     cdrom: { url: REQUIRED_FILES.ISO },
                     autostart: true,
@@ -406,23 +397,25 @@
                     updateDiagnostic("HARDWARE", "READY");
                     document.getElementById('boot-status').innerText = "STARTING CPU...";
                     
+                    // Force run
                     setTimeout(() => emulator.run(), 100);
 
-                    // Check for silent failure (VGA mismatch)
+                    // Silence Detection
+                    term.writeln("\x1b[34m[SYSTEM]\x1b[0m Connecting to Serial Port (ttyS0)...");
+                    
                     setTimeout(() => {
                         if (!serialActive) {
-                            const screenContent = document.getElementById('screen_container').innerText;
-                            if (screenContent.trim().length > 0) {
-                                term.writeln("\x1b[33m[WARNING]\x1b[0m Hardware started, but Serial Port is silent.");
-                                term.writeln("\x1b[31m[ERROR]\x1b[0m Your ISO is outputting to VGA, not Serial.");
-                                term.writeln("Please use the specific ISO from: copy.sh/v86/images/alpine.iso");
-                                term.writeln("\n--- VGA OUTPUT DUMP ---\n");
-                                term.writeln(screenContent.substring(0, 500));
-                            } else {
-                                term.writeln("\x1b[33m[STATUS]\x1b[0m Booting... (This can take 30-60s)");
-                            }
+                            term.writeln("\r\n\x1b[33m[WARNING]\x1b[0m No data received from Serial Port.");
+                            term.writeln("---------------------------------------------------");
+                            term.writeln("\x1b[31mPOSSIBLE CAUSE: WRONG ISO FILE\x1b[0m");
+                            term.writeln("You are likely using a standard Alpine ISO which outputs to VGA.");
+                            term.writeln("This web terminal requires the serial-optimized ISO.");
+                            term.writeln("Download the correct file (5.5MB) here:");
+                            term.writeln("\x1b[34mhttps://github.com/copy/v86/raw/master/images/alpine.iso\x1b[0m");
+                            term.writeln("---------------------------------------------------");
+                            log("Diagnostic: Serial port silence detected.");
                         }
-                    }, 5000);
+                    }, 8000);
                 });
 
                 const dot = document.getElementById('connection-dot');
