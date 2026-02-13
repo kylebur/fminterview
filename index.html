@@ -14,21 +14,18 @@
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             color: #7aa2f7; text-align: center; z-index: 10; background: #1a1b26;
+            transition: opacity 0.5s ease;
         }
         .spinner {
             border: 4px solid rgba(122, 162, 247, 0.1); width: 40px; height: 40px;
             border-radius: 50%; border-left-color: #7aa2f7; animation: spin 1s linear infinite; margin-bottom: 20px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        button {
-            background: #7aa2f7; color: #1a1b26; border: none; padding: 12px 24px;
-            border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 16px;
-        }
-        button:disabled { background: #414868; cursor: wait; }
-        .hidden { display: none; }
+        .hidden { opacity: 0; pointer-events: none; }
         #debug-log {
             position: absolute; bottom: 10px; left: 10px; color: #565f89; 
             font-size: 10px; text-align: left; pointer-events: none;
+            max-height: 200px; overflow-y: auto; width: 100%;
         }
     </style>
 </head>
@@ -37,9 +34,8 @@
     <div id="overlay">
         <div id="loader-content">
             <div class="spinner"></div>
-            <p>Ready to boot Linux...</p>
+            <p id="boot-status">Initializing Web-Native Linux...</p>
         </div>
-        <button id="start-btn" style="display: none;">Start Session</button>
     </div>
 
     <div id="terminal-container"></div>
@@ -59,7 +55,10 @@
         let term, fitAddon, emulator;
 
         function logDebug(msg) {
-            console.log(msg);
+            // Log to browser console
+            console.log("%c[V86 DEBUG]", "color: #7aa2f7; font-weight: bold", msg);
+            
+            // Log to screen UI
             const logDiv = document.getElementById('debug-log');
             const entry = document.createElement('div');
             entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -71,12 +70,16 @@
                 const script = document.createElement('script');
                 script.src = src;
                 script.onload = resolve;
-                script.onerror = reject;
+                script.onerror = (err) => {
+                    logDebug(`Failed to load script: ${src}`);
+                    reject(err);
+                };
                 document.head.appendChild(script);
             });
         }
 
         async function init() {
+            // 1. Setup Terminal
             term = new Terminal({
                 cursorBlink: true,
                 fontFamily: '"Cascadia Code", Menlo, monospace',
@@ -88,75 +91,80 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            logDebug("Terminal initialized.");
+            logDebug("Terminal UI initialized.");
 
             try {
+                // 2. Load v86 Library
+                logDebug("Attempting to load libv86.js...");
                 await loadScript(V86_LIB);
-                logDebug("libv86.js loaded.");
+                logDebug("libv86.js script loaded successfully.");
                 
-                document.getElementById('loader-content').style.display = 'none';
-                const startBtn = document.getElementById('start-btn');
-                startBtn.style.display = 'block';
-                
-                startBtn.onclick = () => {
-                    logDebug("Start button clicked.");
-                    startBtn.disabled = true;
-                    startBtn.innerText = "Initializing VM...";
-                    bootVM();
-                };
+                // 3. Auto-boot VM
+                document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
+                bootVM();
+
             } catch (e) {
-                logDebug("Error loading libv86.js");
-                term.writeln("\x1b[31m[Error]\x1b[0m Failed to load libv86.js from your repository.");
-                term.writeln("Please verify that libv86.js is in the same folder as index.html.");
+                logDebug("CRITICAL ERROR during initialization: " + e.message);
+                term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
+                term.writeln("Ensure 'libv86.js' is in the same folder as index.html.");
             }
         }
 
         function bootVM() {
             try {
-                logDebug("Creating V86Starter instance...");
+                logDebug("Instantiating V86Starter...");
+                
+                // Detailed configuration for auto-boot
                 emulator = new V86Starter({
                     wasm_path: WASM_PATH,
                     memory_size: 128 * 1024 * 1024,
                     vga_as_text_mode: true,
                     bios: { url: BIOS_IMAGE },
                     cdrom: { url: ALPINE_IMAGE },
-                    autostart: true,
+                    autostart: true, // This starts the CPU immediately
                 });
 
+                logDebug("V86Starter object created. Checking for WASM load...");
+
+                // Pipe VM output to xterm.js
                 emulator.add_listener("serial0-output-char", (char) => {
-                    if (document.getElementById('overlay')) {
-                        document.getElementById('overlay').classList.add('hidden');
-                        logDebug("First character received from VM.");
+                    // Hide overlay once the BIOS/Kernel starts sending characters
+                    const overlay = document.getElementById('overlay');
+                    if (overlay && !overlay.classList.contains('hidden')) {
+                        overlay.classList.add('hidden');
+                        logDebug("Guest activity detected. Terminal active.");
                     }
                     term.write(char);
                 });
                 
+                // Handle keyboard input
                 term.onData((data) => {
                     if (emulator) emulator.serial0_send(data);
                 });
 
-                window.addEventListener('resize', () => fitAddon.fit());
+                window.addEventListener('resize', () => {
+                    fitAddon.fit();
+                });
+                
                 term.focus();
                 
-                logDebug("VM started. Waiting for output...");
-
-                // Fallback: If no output after 10 seconds, show error
+                // Watchdog for common file loading issues
                 setTimeout(() => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Timeout: No output from VM after 10s.");
-                        term.writeln("\x1b[33m[Warning]\x1b[0m No response from VM yet. Check if linux.iso and seabios.bin are in the correct folder.");
-                        document.getElementById('start-btn').disabled = false;
-                        document.getElementById('start-btn').innerText = "Retry Session";
+                        logDebug("Watchdog: No output from VM after 10 seconds.");
+                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for guest response...");
+                        term.writeln("Verify linux.iso and seabios.bin exist at the root of your repo.");
                     }
                 }, 10000);
 
             } catch (err) {
                 logDebug("Exception during bootVM: " + err.message);
-                term.writeln("\x1b[31m[Error]\x1b[0m Boot failed: " + err.message);
+                term.writeln("\x1b[31m[Error]\x1b[0m VM failed to start: " + err.message);
             }
         }
 
+        // Start everything on page load
         window.onload = init;
     </script>
 </body>
