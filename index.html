@@ -10,11 +10,8 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- 
-        V86 EMULATOR ENGINE (Inline)
-        We are inlining a loader and the core logic to prevent CORS/404 issues.
-    -->
-    <script src="https://cdn.jsdelivr.net/npm/v86@0.10.2/build/libv86.js"></script>
+    <!-- Emulator Engine -->
+    <script src="./libv86.js"></script>
 
     <style>
         :root {
@@ -56,7 +53,7 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
         }
 
@@ -109,6 +106,7 @@
             border-radius: 12px;
             border: 1px solid #24283b;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            min-width: 280px;
         }
 
         .spinner {
@@ -137,6 +135,16 @@
             max-height: 100px;
             overflow: hidden;
         }
+
+        .version-tag {
+            background: #24283b;
+            color: var(--accent-color);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+        }
     </style>
 </head>
 <body>
@@ -150,6 +158,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
+                <span class="version-tag">v1.1</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -164,7 +173,7 @@
         <div class="loader-box">
             <div class="spinner"></div>
             <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">INITIALIZING CORE...</p>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Checking emulator environment...</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Build version: 1.1.0</p>
         </div>
     </div>
 
@@ -215,12 +224,11 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready.");
+            log("UI Engine Ready (Build 1.1).");
 
             try {
                 log("Verifying Emulator Library...");
                 
-                // Helper to find V86Starter in any scope
                 const findV86 = () => {
                     if (typeof window.V86Starter !== 'undefined') return window.V86Starter;
                     if (typeof V86Starter !== 'undefined') return V86Starter;
@@ -229,8 +237,7 @@
 
                 let v86Class = findV86();
 
-                // If not found, it's likely a script loading error. 
-                // We'll give it a few seconds in case of slow parsing.
+                // Wait up to 3 seconds for local script to register global variable
                 if (!v86Class) {
                     for (let i = 0; i < 30; i++) {
                         v86Class = findV86();
@@ -240,7 +247,7 @@
                 }
 
                 if (!v86Class) {
-                    throw new Error("V86Starter class not found. Ensure libv86.js is present or CDN is accessible.");
+                    throw new Error("V86Starter not found. Verify libv86.js is at root.");
                 }
 
                 log("Engine confirmed. Preparing Boot...");
@@ -250,7 +257,7 @@
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Library missing. Try downloading libv86.js to your repository root.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Check console for file load errors.");
                 document.getElementById('boot-status').innerText = "BOOT FAILED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
@@ -285,7 +292,7 @@
 
                 emulator.add_listener("download-error", (url) => {
                     log("Download failed: " + url);
-                    term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m File not found or blocked: ${url}`);
+                    term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m Resource blocked or missing: ${url}`);
                 });
 
                 term.onData(data => {
