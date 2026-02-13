@@ -55,10 +55,7 @@
         let term, fitAddon, emulator;
 
         function logDebug(msg) {
-            // Log to browser console
             console.log("%c[V86 DEBUG]", "color: #7aa2f7; font-weight: bold", msg);
-            
-            // Log to screen UI
             const logDiv = document.getElementById('debug-log');
             const entry = document.createElement('div');
             entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -70,11 +67,11 @@
                 const script = document.createElement('script');
                 script.src = src;
                 script.onload = () => {
-                    logDebug(`Script loaded successfully: ${src}`);
+                    logDebug(`Script file reached: ${src}`);
                     resolve();
                 };
                 script.onerror = (err) => {
-                    logDebug(`Failed to load script: ${src}`);
+                    logDebug(`Network error loading script: ${src}`);
                     reject(err);
                 };
                 document.head.appendChild(script);
@@ -82,7 +79,6 @@
         }
 
         async function init() {
-            // 1. Setup Terminal
             term = new Terminal({
                 cursorBlink: true,
                 fontFamily: '"Cascadia Code", Menlo, monospace',
@@ -97,31 +93,42 @@
             logDebug("Terminal UI initialized.");
 
             try {
-                // 2. Load v86 Library
                 logDebug("Attempting to load libv86.js...");
                 await loadScript(V86_LIB);
                 
-                // 3. Verify V86Starter is available (polling briefly)
-                let retries = 0;
-                while (typeof V86Starter === 'undefined' && retries < 10) {
-                    logDebug("V86Starter not yet in scope, waiting...");
-                    await new Promise(r => setTimeout(r, 500));
-                    retries++;
-                }
+                // The log shows "Script loaded successfully" but V86Starter is missing immediately after.
+                // We will poll for up to 5 seconds to allow the browser to parse/execute the script.
+                logDebug("Script tag injected. Polling for V86Starter variable...");
+                
+                let checkAttempts = 0;
+                const maxAttempts = 50; // 5 seconds total (100ms * 50)
+                
+                const waitForV86 = new Promise((resolve, reject) => {
+                    const check = () => {
+                        if (typeof window.V86Starter !== 'undefined') {
+                            logDebug("V86Starter found in window scope!");
+                            resolve();
+                        } else if (checkAttempts < maxAttempts) {
+                            checkAttempts++;
+                            setTimeout(check, 100);
+                        } else {
+                            reject(new Error("Timeout waiting for V86Starter to initialize."));
+                        }
+                    };
+                    check();
+                });
 
-                if (typeof V86Starter === 'undefined') {
-                    throw new Error("libv86.js loaded but V86Starter variable is missing.");
-                }
+                await waitForV86;
 
-                logDebug("V86Starter confirmed in scope. Starting boot...");
+                logDebug("V86Starter confirmed. Starting boot sequence...");
                 document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
                 bootVM();
 
             } catch (e) {
-                logDebug("CRITICAL ERROR during initialization: " + e.message);
+                logDebug("CRITICAL ERROR: " + e.message);
                 term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
                 term.writeln(`\x1b[33m[Details]\x1b[0m ${e.message}`);
-                term.writeln("Ensure 'libv86.js' is in the same folder as index.html.");
+                term.writeln("Check if 'libv86.js' is a valid JS file and not an HTML error page.");
             }
         }
 
@@ -129,7 +136,7 @@
             try {
                 logDebug("Instantiating V86Starter...");
                 
-                emulator = new V86Starter({
+                emulator = new window.V86Starter({
                     wasm_path: WASM_PATH,
                     memory_size: 128 * 1024 * 1024,
                     vga_as_text_mode: true,
@@ -138,50 +145,41 @@
                     autostart: true,
                 });
 
-                logDebug("V86Starter object created. Checking for file loads...");
+                logDebug("V86Starter object created successfully.");
 
-                // Monitor for network/file errors
                 emulator.add_listener("download-error", (url) => {
                     logDebug(`Download failed for: ${url}`);
                     term.writeln(`\x1b[31m[Error]\x1b[0m Failed to download: ${url}`);
                 });
 
-                // Pipe VM output to xterm.js
                 emulator.add_listener("serial0-output-char", (char) => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
                         overlay.classList.add('hidden');
-                        logDebug("Guest activity detected. Terminal active.");
+                        logDebug("Guest activity detected.");
                     }
                     term.write(char);
                 });
                 
-                // Handle keyboard input
                 term.onData((data) => {
                     if (emulator) emulator.serial0_send(data);
                 });
 
-                window.addEventListener('resize', () => {
-                    fitAddon.fit();
-                });
-                
+                window.addEventListener('resize', () => fitAddon.fit());
                 term.focus();
                 
-                // Watchdog for missing files or BIOS hangs
                 setTimeout(() => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Watchdog triggered: No output after 10s.");
+                        logDebug("Watchdog: No output from VM after 10s.");
                         term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for guest response...");
-                        term.writeln("Common issues:");
-                        term.writeln("1. Check Browser Console (F12) for 404 errors on .iso or .wasm");
-                        term.writeln("2. Ensure filenames are lower-case: linux.iso, v86.wasm, etc.");
-                        term.writeln("3. Refresh the page to clear browser cache.");
+                        term.writeln("1. Check if linux.iso is actually a bootable image.");
+                        term.writeln("2. Ensure seabios.bin is present.");
                     }
                 }, 10000);
 
             } catch (err) {
-                logDebug("Exception during bootVM: " + err.message);
+                logDebug("Exception in bootVM: " + err.message);
                 term.writeln("\x1b[31m[Error]\x1b[0m VM failed to start: " + err.message);
             }
         }
