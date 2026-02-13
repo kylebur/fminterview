@@ -171,7 +171,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.5</span>
+                <span class="version-tag">v1.6</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -189,7 +189,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.5.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.6.0</p>
         </div>
     </div>
 
@@ -252,9 +252,8 @@
         }
 
         /**
-         * Robust script loader using Blob and URL.createObjectURL
-         * This forces the browser to treat the fetched text as a discrete script file,
-         * which is highly effective for ensuring globals like V86Starter are registered.
+         * Robust script loader using direct evaluation.
+         * Version 1.6 uses new Function() to force execution in the current global scope.
          */
         async function loadScriptRobustly(url) {
             updateDiagnostic("JS_LOAD", "FETCHING");
@@ -262,24 +261,20 @@
                 const response = await fetch(url);
                 const scriptText = await response.text();
                 
-                const blob = new Blob([scriptText], { type: 'application/javascript' });
-                const blobUrl = URL.createObjectURL(blob);
+                log("Script fetched. Executing via Function constructor...");
                 
-                return new Promise((resolve, reject) => {
-                    const script = document.createElement('script');
-                    script.src = blobUrl;
-                    script.onload = () => {
-                        URL.revokeObjectURL(blobUrl);
-                        updateDiagnostic("JS_LOAD", "EXECUTED");
-                        resolve(true);
-                    };
-                    script.onerror = () => {
-                        URL.revokeObjectURL(blobUrl);
-                        updateDiagnostic("JS_LOAD", "EXEC_FAIL", true);
-                        reject(new Error("Execution failure."));
-                    };
-                    document.head.appendChild(script);
-                });
+                try {
+                    // This is more aggressive than Blob injection. 
+                    // It forces the browser to evaluate the code immediately in the global scope.
+                    const execute = new Function(scriptText);
+                    execute();
+                    updateDiagnostic("JS_LOAD", "EXECUTED");
+                    return true;
+                } catch (execError) {
+                    log("Execution error: " + execError.message);
+                    updateDiagnostic("JS_LOAD", "EXEC_FAIL", true);
+                    return false;
+                }
             } catch (e) {
                 updateDiagnostic("JS_LOAD", "FETCH_FAIL", true);
                 return false;
@@ -315,7 +310,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.5).");
+            log("UI Engine Ready (Build 1.6).");
 
             try {
                 // 2. Pre-flight Check
@@ -334,10 +329,18 @@
                 await loadScriptRobustly(REQUIRED_FILES.LIBRARY);
 
                 log("Verifying Engine Scope...");
-                const findV86 = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
+                
+                // Broad search for v86 globals
+                const findV86 = () => {
+                    return window.V86Starter || 
+                           (typeof V86Starter !== 'undefined' ? V86Starter : null) ||
+                           window.v86 ||
+                           (typeof v86 !== 'undefined' ? v86 : null);
+                };
                 
                 let v86Class = findV86();
                 if (!v86Class) {
+                    log("V86 not found yet, polling...");
                     for (let i = 0; i < 50; i++) {
                         v86Class = findV86();
                         if (v86Class) break;
@@ -348,18 +351,18 @@
 
                 if (!v86Class) {
                     updateDiagnostic("ENGINE", "MISSING", true);
-                    throw new Error("V86Starter class not found in global scope after execution.");
+                    throw new Error("V86Starter class not found in global scope. Check if libv86.js is a valid IIFE build.");
                 }
+                
                 updateDiagnostic("ENGINE", "READY");
-
-                log("Booting Virtual Machine...");
+                log("Engine confirmed. Preparing Boot...");
                 document.getElementById('boot-status').innerText = "BOOTING...";
                 bootVM(v86Class);
 
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Check if your libv86.js starts with 'var V86Starter=...'.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Build 1.6 used Function constructor injection.");
                 document.getElementById('boot-status').innerText = "STOPPED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
