@@ -104,7 +104,7 @@
             border-radius: 12px;
             border: 1px solid #24283b;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            min-width: 320px;
+            min-width: 340px;
         }
 
         .spinner {
@@ -151,9 +151,22 @@
             margin: 4px 0;
             color: var(--text-muted);
         }
-
-        .diagnostic-step span:last-child {
-            font-weight: bold;
+        
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #24283b;
+            margin-top: 15px;
+            border-radius: 2px;
+            overflow: hidden;
+            display: none;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-color);
+            width: 0%;
+            transition: width 0.2s;
         }
 
         .step-success { color: var(--success-color); }
@@ -171,7 +184,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.9</span>
+                <span class="version-tag">v2.0</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -186,10 +199,11 @@
         <div class="loader-box">
             <div class="spinner"></div>
             <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">PRE-FLIGHT CHECK...</p>
+            <div class="progress-bar" id="dl-progress"><div class="progress-fill" id="dl-fill"></div></div>
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.9.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.0.0</p>
         </div>
     </div>
 
@@ -251,43 +265,26 @@
             }
         }
 
-        /**
-         * Robust script loader using Module-to-Global Shim
-         * Version 1.7 wraps the library in a scope that captures exports
-         * and explicitly maps them to window.V86Starter.
-         */
         async function loadScriptRobustly(url) {
             updateDiagnostic("JS_LOAD", "FETCHING");
             try {
                 const response = await fetch(url);
                 const scriptText = await response.text();
-                
                 log("Script fetched. Injecting Global Shim...");
                 
                 try {
-                    // Create a shim that simulates a module environment to capture isolated exports
                     const shim = `
                         (function() {
                             var module = { exports: {} };
                             var exports = module.exports;
-                            (function() {
-                                ${scriptText}
-                            }).call(window);
-                            
-                            // Force manual export if the library didn't set window.V86Starter
-                            window.V86Starter = window.V86Starter || 
-                                              module.exports.V86Starter || 
-                                              module.exports || 
-                                              this.V86Starter;
-                            
-                            console.log("[Shim] Export check:", !!window.V86Starter);
+                            (function() { ${scriptText} }).call(window);
+                            window.V86Starter = window.V86Starter || module.exports.V86Starter || module.exports || this.V86Starter;
+                            window.v86 = window.v86 || window.V86Starter;
                         }).call(window);
                     `;
-
                     const script = document.createElement('script');
                     script.text = shim;
                     document.head.appendChild(script);
-                    
                     updateDiagnostic("JS_LOAD", "SHIMMED");
                     return true;
                 } catch (execError) {
@@ -302,26 +299,12 @@
         }
 
         async function init() {
-            // 1. Terminal Setup
             term = new Terminal({
                 cursorBlink: true,
                 fontFamily: '"JetBrains Mono", "Cascadia Code", Menlo, monospace',
                 fontSize: 14,
                 lineHeight: 1.2,
-                theme: {
-                    background: '#1a1b26',
-                    foreground: '#a9b1d6',
-                    cursor: '#c0caf5',
-                    selectionBackground: '#33467c',
-                    black: '#15161e',
-                    red: '#f7768e',
-                    green: '#9ce200',
-                    yellow: '#e0af68',
-                    blue: '#7aa2f7',
-                    magenta: '#bb9af7',
-                    cyan: '#7dcfff',
-                    white: '#a9b1d6'
-                }
+                theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' }
             });
 
             fitAddon = new FitAddon.FitAddon();
@@ -330,10 +313,9 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.9).");
+            log("UI Engine Ready (Build 2.0).");
 
             try {
-                // 2. Pre-flight Check
                 const results = await Promise.all([
                     checkFile("LIB_FILE", REQUIRED_FILES.LIBRARY),
                     checkFile("WASM_FILE", REQUIRED_FILES.WASM),
@@ -341,69 +323,43 @@
                     checkFile("BIOS_FILE", REQUIRED_FILES.BIOS)
                 ]);
 
-                if (results.includes(false)) {
-                    throw new Error("One or more local files are missing or invalid.");
-                }
+                if (results.includes(false)) throw new Error("Local file check failed.");
 
-                // 3. Load Engine
                 await loadScriptRobustly(REQUIRED_FILES.LIBRARY);
 
-                log("Verifying Engine Scope...");
-                
-                const findV86 = () => {
-                    return window.V86Starter || 
-                           (typeof V86Starter !== 'undefined' ? V86Starter : null) ||
-                           window.v86 ||
-                           (typeof v86 !== 'undefined' ? v86 : null);
-                };
+                log("Resolving V86 Class...");
+                const findV86 = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null) || window.v86;
                 
                 let v86Class = findV86();
                 if (!v86Class) {
-                    log("V86 not found yet, polling...");
                     for (let i = 0; i < 50; i++) {
                         v86Class = findV86();
                         if (v86Class) break;
                         await new Promise(r => setTimeout(r, 100));
-                        if (i % 10 === 0 && i > 0) log(`Global check retry: ${i/10}s...`);
                     }
                 }
 
                 if (!v86Class) {
                     updateDiagnostic("ENGINE", "MISSING", true);
-                    throw new Error("V86Starter class not found in global scope after Shim injection.");
+                    throw new Error("V86 Class not found in global scope.");
                 }
-                
-                // --- INTROSPECTION START ---
-                // Handle case where export is an object wrapping the constructor
-                log("V86 Object found. Type: " + typeof v86Class);
-                
+
+                // Unwrap object structure if needed
                 if (typeof v86Class !== 'function') {
-                     log("V86 is not a function. Inspecting properties...");
-                     if (v86Class.V86Starter && typeof v86Class.V86Starter === 'function') {
-                         log("Found V86Starter inside object.");
-                         v86Class = v86Class.V86Starter;
-                     } else if (v86Class.default && typeof v86Class.default === 'function') {
-                         log("Found default export inside object.");
-                         v86Class = v86Class.default;
-                     } else if (v86Class.V86 && typeof v86Class.V86 === 'function') {
-                         log("Found V86 inside object.");
-                         v86Class = v86Class.V86;
-                     } else {
-                         const keys = Object.keys(v86Class);
-                         log("Available keys: " + keys.join(", "));
-                     }
+                     if (v86Class.V86Starter && typeof v86Class.V86Starter === 'function') v86Class = v86Class.V86Starter;
+                     else if (v86Class.default && typeof v86Class.default === 'function') v86Class = v86Class.default;
+                     else if (v86Class.V86 && typeof v86Class.V86 === 'function') v86Class = v86Class.V86;
                 }
-                // --- INTROSPECTION END ---
 
                 updateDiagnostic("ENGINE", "READY");
-                log("Engine confirmed. Preparing Boot...");
                 document.getElementById('boot-status').innerText = "BOOTING...";
+                document.getElementById('dl-progress').style.display = 'block';
+                
                 bootVM(v86Class);
 
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Ensure Build version 1.9.0 is displayed on screen.");
                 document.getElementById('boot-status').innerText = "STOPPED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
@@ -411,10 +367,7 @@
 
         function bootVM(V86Class) {
             try {
-                // Final safety check before instantiation
-                if (typeof V86Class !== 'function') {
-                    throw new Error("Resolved V86 object is still not a constructor. Check logs.");
-                }
+                if (typeof V86Class !== 'function') throw new Error("V86 object is not a constructor.");
 
                 emulator = new V86Class({
                     wasm_path: REQUIRED_FILES.WASM,
@@ -423,6 +376,37 @@
                     bios: { url: REQUIRED_FILES.BIOS },
                     cdrom: { url: REQUIRED_FILES.ISO },
                     autostart: true,
+                    disable_mouse: false,
+                    serial_container_xtermjs: term // Attempt direct xterm binding if supported
+                });
+
+                log("Emulator Constructed.");
+
+                // LISTENERS
+                emulator.add_listener("download-progress", (e) => {
+                    const prog = e.file_index / e.file_count;
+                    // Approximate progress based on files
+                    // Ideally check bytes, but file count is standard v86 event
+                    log(`Loading file ${e.file_index + 1}/${e.file_count}`);
+                });
+
+                // Detailed download progress if available
+                let loadedBytes = 0;
+                emulator.add_listener("download-progress", (e) => {
+                    if (e.loaded && e.total) {
+                         const pct = Math.round((e.loaded / e.total) * 100);
+                         document.getElementById('dl-fill').style.width = pct + "%";
+                         document.getElementById('boot-status').innerText = `DOWNLOADING ${pct}%`;
+                    }
+                });
+
+                emulator.add_listener("emulator-ready", () => {
+                    log("WASM Ready. Hardware Initialized.");
+                    updateDiagnostic("HARDWARE", "READY");
+                    document.getElementById('boot-status').innerText = "STARTING CPU...";
+                    
+                    // Force start if autostart didn't catch
+                    setTimeout(() => emulator.run(), 100);
                 });
 
                 const dot = document.getElementById('connection-dot');
@@ -440,17 +424,16 @@
                 });
 
                 emulator.add_listener("download-error", (url) => {
-                    log("VM Download error: " + url);
-                    term.writeln(`\r\n\x1b[31m[VM_FETCH_FAIL]\x1b[0m ${url}`);
+                    log("DL Error: " + url);
+                    term.writeln(`\r\n\x1b[31m[DOWNLOAD_FAIL]\x1b[0m ${url}`);
                 });
 
-                term.onData(data => {
-                    if (emulator) emulator.serial0_send(data);
-                });
+                // Key handling
+                term.onData(data => emulator.serial0_send(data));
 
                 window.addEventListener('resize', () => fitAddon.fit());
                 term.focus();
-                
+
             } catch (err) {
                 log("Boot logic failure: " + err.message);
                 term.writeln("\r\n\x1b[31m[RUNTIME_ERROR]\x1b[0m " + err.message);
