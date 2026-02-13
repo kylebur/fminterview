@@ -10,9 +10,6 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Emulator Engine - Using defer to ensure DOM is ready but global is set before init -->
-    <script src="./libv86.js" defer></script>
-
     <style>
         :root {
             --bg-color: #1a1b26;
@@ -20,6 +17,7 @@
             --accent-color: #7aa2f7;
             --text-muted: #565f89;
             --success-color: #9ce200;
+            --error-color: #f7768e;
         }
 
         body, html { 
@@ -106,7 +104,7 @@
             border-radius: 12px;
             border: 1px solid #24283b;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            min-width: 280px;
+            min-width: 320px;
         }
 
         .spinner {
@@ -145,6 +143,21 @@
             font-weight: bold;
             letter-spacing: 0.5px;
         }
+
+        .diagnostic-step {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            margin: 4px 0;
+            color: var(--text-muted);
+        }
+
+        .diagnostic-step span:last-child {
+            font-weight: bold;
+        }
+
+        .step-success { color: var(--success-color); }
+        .step-fail { color: var(--error-color); }
     </style>
 </head>
 <body>
@@ -158,7 +171,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.2</span>
+                <span class="version-tag">v1.3</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -172,17 +185,23 @@
     <div id="overlay">
         <div class="loader-box">
             <div class="spinner"></div>
-            <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">INITIALIZING CORE...</p>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Build version: 1.2.0</p>
+            <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">PRE-FLIGHT CHECK...</p>
+            <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
+                <!-- Steps will be injected here -->
+            </div>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.3.0</p>
         </div>
     </div>
 
     <div id="debug-console"></div>
 
     <script>
-        const WASM_PATH = "./v86.wasm";
-        const ALPINE_IMAGE = "./linux.iso";
-        const BIOS_IMAGE = "./seabios.bin";
+        const REQUIRED_FILES = {
+            LIBRARY: "./libv86.js",
+            WASM: "./v86.wasm",
+            ISO: "./linux.iso",
+            BIOS: "./seabios.bin"
+        };
 
         let term, fitAddon, emulator;
 
@@ -193,6 +212,55 @@
             line.textContent = `> ${msg}`;
             debug.appendChild(line);
             if (debug.childNodes.length > 8) debug.removeChild(debug.firstChild);
+        }
+
+        function updateDiagnostic(id, status, isError = false) {
+            const list = document.getElementById('diagnostic-list');
+            let item = document.getElementById(`diag-${id}`);
+            if (!item) {
+                item = document.createElement('div');
+                item.id = `diag-${id}`;
+                item.className = 'diagnostic-step';
+                item.innerHTML = `<span>${id}:</span> <span class="step-status">...</span>`;
+                list.appendChild(item);
+            }
+            const statusSpan = item.querySelector('.step-status');
+            statusSpan.innerText = status;
+            statusSpan.className = isError ? 'step-status step-fail' : 'step-status step-success';
+        }
+
+        async function checkFile(name, url) {
+            updateDiagnostic(name, "CHECKING");
+            try {
+                const response = await fetch(url, { method: 'HEAD' });
+                if (response.ok) {
+                    updateDiagnostic(name, "OK");
+                    return true;
+                } else {
+                    updateDiagnostic(name, `FAIL (${response.status})`, true);
+                    return false;
+                }
+            } catch (e) {
+                updateDiagnostic(name, "ERR", true);
+                return false;
+            }
+        }
+
+        async function loadScript(url) {
+            updateDiagnostic("JS_LOAD", "INJECTING");
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = url;
+                script.onload = () => {
+                    updateDiagnostic("JS_LOAD", "DONE");
+                    resolve();
+                };
+                script.onerror = () => {
+                    updateDiagnostic("JS_LOAD", "ERROR", true);
+                    reject(new Error(`Failed to load script: ${url}`));
+                };
+                document.head.appendChild(script);
+            });
         }
 
         async function init() {
@@ -224,60 +292,63 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.2).");
+            log("UI Engine Ready (Build 1.3).");
 
             try {
-                log("Verifying Emulator Library...");
+                // 2. Pre-flight Check
+                const results = await Promise.all([
+                    checkFile("LIB_FILE", REQUIRED_FILES.LIBRARY),
+                    checkFile("WASM_FILE", REQUIRED_FILES.WASM),
+                    checkFile("ISO_FILE", REQUIRED_FILES.ISO),
+                    checkFile("BIOS_FILE", REQUIRED_FILES.BIOS)
+                ]);
+
+                if (results.includes(false)) {
+                    throw new Error("One or more local files are missing from the repository.");
+                }
+
+                // 3. Load Engine
+                await loadScript(REQUIRED_FILES.LIBRARY);
+
+                log("Verifying Engine Scope...");
+                const findV86 = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
                 
-                const findV86 = () => {
-                    // Modern environment global check
-                    if (typeof window.V86Starter !== 'undefined') return window.V86Starter;
-                    if (typeof V86Starter !== 'undefined') return V86Starter;
-                    return null;
-                };
-
                 let v86Class = findV86();
-
-                // Wait up to 10 seconds for local script to register global variable
-                // Some hosting environments have delayed execution for large JS files
                 if (!v86Class) {
-                    for (let i = 0; i < 100; i++) {
+                    for (let i = 0; i < 50; i++) {
                         v86Class = findV86();
                         if (v86Class) break;
                         await new Promise(r => setTimeout(r, 100));
-                        if (i % 10 === 0 && i > 0) log(`Verification retry: ${i/10}s...`);
                     }
                 }
 
                 if (!v86Class) {
-                    throw new Error("V86Starter not found after 10s. The file './libv86.js' is either missing or blocked.");
+                    updateDiagnostic("ENGINE", "MISSING", true);
+                    throw new Error("Library loaded but V86Starter class is missing from global scope.");
                 }
+                updateDiagnostic("ENGINE", "READY");
 
-                log("Engine confirmed. Preparing Boot...");
-                document.getElementById('boot-status').innerText = "PREPARING VIRTUAL MACHINE...";
+                log("Booting Virtual Machine...");
+                document.getElementById('boot-status').innerText = "BOOTING...";
                 bootVM(v86Class);
 
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 1. Verify libv86.js is at repository root.");
-                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 2. Ensure the filename is exactly 'libv86.js' (case-sensitive).");
-                term.writeln("\x1b[33m[DIAGNOSTIC]\x1b[0m 3. Check Network tab for 404 or MIME type errors.");
-                document.getElementById('boot-status').innerText = "BOOT FAILED";
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Check the diagnostics above and ensure all files are in the repository root.");
+                document.getElementById('boot-status').innerText = "STOPPED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
         }
 
         function bootVM(V86Class) {
-            log("Initializing V86 instance...");
-            
             try {
                 emulator = new V86Class({
-                    wasm_path: WASM_PATH,
+                    wasm_path: REQUIRED_FILES.WASM,
                     memory_size: 256 * 1024 * 1024,
                     vga_as_text_mode: true,
-                    bios: { url: BIOS_IMAGE },
-                    cdrom: { url: ALPINE_IMAGE },
+                    bios: { url: REQUIRED_FILES.BIOS },
+                    cdrom: { url: REQUIRED_FILES.ISO },
                     autostart: true,
                 });
 
@@ -290,14 +361,14 @@
                         overlay.classList.add('hidden');
                         dot.classList.add('active');
                         label.innerText = "SYSTEM ACTIVE";
-                        log("Serial link established.");
+                        log("First boot output received.");
                     }
                     term.write(char);
                 });
 
                 emulator.add_listener("download-error", (url) => {
-                    log("Download failed: " + url);
-                    term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m Resource blocked or missing: ${url}`);
+                    log("VM Download error: " + url);
+                    term.writeln(`\r\n\x1b[31m[VM_FETCH_FAIL]\x1b[0m ${url}`);
                 });
 
                 term.onData(data => {
@@ -308,8 +379,8 @@
                 term.focus();
                 
             } catch (err) {
-                log("Constructor error: " + err.message);
-                term.writeln("\r\n\x1b[31m[CONSTRUCTOR_ERROR]\x1b[0m " + err.message);
+                log("Boot logic failure: " + err.message);
+                term.writeln("\r\n\x1b[31m[RUNTIME_ERROR]\x1b[0m " + err.message);
             }
         }
 
