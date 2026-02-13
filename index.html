@@ -169,6 +169,16 @@
             transition: width 0.2s;
         }
 
+        /* Hidden screen for VGA capture if needed */
+        #screen_container {
+            display: none; 
+            position: absolute; 
+            top: 0; 
+            left: 0;
+            white-space: pre;
+            font-family: monospace;
+        }
+
         .step-success { color: var(--success-color); }
         .step-fail { color: var(--error-color); }
     </style>
@@ -184,7 +194,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v2.1</span>
+                <span class="version-tag">v2.2</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -193,6 +203,7 @@
         </header>
 
         <div id="terminal-container"></div>
+        <div id="screen_container"></div>
     </div>
 
     <div id="overlay">
@@ -203,7 +214,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.1.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 2.2.0</p>
         </div>
     </div>
 
@@ -218,6 +229,7 @@
         };
 
         let term, fitAddon, emulator;
+        let serialActive = false;
 
         function log(msg) {
             console.log(`%c[VM] ${msg}`, "color: #7aa2f7");
@@ -313,7 +325,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 2.1).");
+            log("UI Engine Ready (Build 2.2).");
 
             try {
                 const results = await Promise.all([
@@ -344,7 +356,6 @@
                     throw new Error("V86 Class not found in global scope.");
                 }
 
-                // Unwrap object structure if needed
                 if (typeof v86Class !== 'function') {
                      if (v86Class.V86Starter && typeof v86Class.V86Starter === 'function') v86Class = v86Class.V86Starter;
                      else if (v86Class.default && typeof v86Class.default === 'function') v86Class = v86Class.default;
@@ -369,28 +380,19 @@
             try {
                 if (typeof V86Class !== 'function') throw new Error("V86 object is not a constructor.");
 
-                // Removed 'serial_container_xtermjs' to avoid conflict with xterm v5+
                 emulator = new V86Class({
                     wasm_path: REQUIRED_FILES.WASM,
                     memory_size: 256 * 1024 * 1024,
                     vga_as_text_mode: true,
+                    screen_container: document.getElementById('screen_container'), // Added screen container
                     bios: { url: REQUIRED_FILES.BIOS },
                     cdrom: { url: REQUIRED_FILES.ISO },
                     autostart: true,
                     disable_mouse: false
-                    // Manual pipe handling is established below
                 });
 
-                log("Emulator Constructed (Manual Bridge).");
+                log("Emulator Constructed.");
 
-                // LISTENERS
-                emulator.add_listener("download-progress", (e) => {
-                    const prog = e.file_index / e.file_count;
-                    log(`Loading file ${e.file_index + 1}/${e.file_count}`);
-                });
-
-                // Detailed download progress if available
-                let loadedBytes = 0;
                 emulator.add_listener("download-progress", (e) => {
                     if (e.loaded && e.total) {
                          const pct = Math.round((e.loaded / e.total) * 100);
@@ -404,14 +406,30 @@
                     updateDiagnostic("HARDWARE", "READY");
                     document.getElementById('boot-status').innerText = "STARTING CPU...";
                     
-                    // Force start if autostart didn't catch
                     setTimeout(() => emulator.run(), 100);
+
+                    // Check for silent failure (VGA mismatch)
+                    setTimeout(() => {
+                        if (!serialActive) {
+                            const screenContent = document.getElementById('screen_container').innerText;
+                            if (screenContent.trim().length > 0) {
+                                term.writeln("\x1b[33m[WARNING]\x1b[0m Hardware started, but Serial Port is silent.");
+                                term.writeln("\x1b[31m[ERROR]\x1b[0m Your ISO is outputting to VGA, not Serial.");
+                                term.writeln("Please use the specific ISO from: copy.sh/v86/images/alpine.iso");
+                                term.writeln("\n--- VGA OUTPUT DUMP ---\n");
+                                term.writeln(screenContent.substring(0, 500));
+                            } else {
+                                term.writeln("\x1b[33m[STATUS]\x1b[0m Booting... (This can take 30-60s)");
+                            }
+                        }
+                    }, 5000);
                 });
 
                 const dot = document.getElementById('connection-dot');
                 const label = document.getElementById('system-label');
 
                 emulator.add_listener("serial0-output-char", (char) => {
+                    serialActive = true;
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
                         overlay.classList.add('hidden');
@@ -427,7 +445,6 @@
                     term.writeln(`\r\n\x1b[31m[DOWNLOAD_FAIL]\x1b[0m ${url}`);
                 });
 
-                // Key handling
                 term.onData(data => emulator.serial0_send(data));
 
                 window.addEventListener('resize', () => fitAddon.fit());
