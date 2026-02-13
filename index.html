@@ -10,7 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Emulator Engine -->
+    <!-- Emulator Engine Local - Primary -->
     <script src="./libv86.js"></script>
 
     <style>
@@ -131,6 +131,8 @@
             color: #414868;
             pointer-events: none;
             text-align: right;
+            max-height: 100px;
+            overflow: hidden;
         }
     </style>
 </head>
@@ -166,13 +168,10 @@
     <div id="debug-console"></div>
 
     <script>
-        /**
-         * GitHub Pages Local Configuration
-         * Files must exist at root: linux.iso, seabios.bin, libv86.js, v86.wasm
-         */
         const WASM_PATH = "./v86.wasm";
         const ALPINE_IMAGE = "./linux.iso";
         const BIOS_IMAGE = "./seabios.bin";
+        const V86_FALLBACK_CDN = "https://cdn.jsdelivr.net/npm/v86@0.10.2/build/libv86.js";
 
         let term, fitAddon, emulator;
 
@@ -182,11 +181,22 @@
             const line = document.createElement('div');
             line.textContent = `> ${msg}`;
             debug.appendChild(line);
-            if (debug.childNodes.length > 5) debug.removeChild(debug.firstChild);
+            if (debug.childNodes.length > 8) debug.removeChild(debug.firstChild);
+        }
+
+        function loadExternalScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.async = true;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
         }
 
         async function init() {
-            // 1. Terminal Setup with Tokyo Night Theme
+            // 1. Terminal Setup
             term = new Terminal({
                 cursorBlink: true,
                 fontFamily: '"JetBrains Mono", "Cascadia Code", Menlo, monospace',
@@ -205,66 +215,73 @@
                     magenta: '#bb9af7',
                     cyan: '#7dcfff',
                     white: '#a9b1d6'
-                },
-                allowProposedApi: true
+                }
             });
 
             fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
             term.loadAddon(new WebLinksAddon.WebLinksAddon());
-            
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
             log("UI Engine Ready.");
 
-            // 2. Resource Verification
             try {
-                log("Verifying Emulator Library...");
-                
                 const getStarter = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
                 
                 let attempts = 0;
-                const waitForLib = () => new Promise((resolve, reject) => {
-                    const check = () => {
+                log("Verifying local libv86.js...");
+                
+                const V86 = await new Promise(async (resolve, reject) => {
+                    const check = async () => {
                         const s = getStarter();
-                        if (s) resolve(s);
-                        else if (attempts++ < 100) setTimeout(check, 100);
-                        else reject(new Error("Emulator library (libv86.js) failed to initialize."));
+                        if (s) {
+                            resolve(s);
+                        } else if (attempts < 30) { // Try local for 3 seconds
+                            attempts++;
+                            setTimeout(check, 100);
+                        } else {
+                            log("Local engine failed. Trying CDN fallback...");
+                            try {
+                                await loadExternalScript(V86_FALLBACK_CDN);
+                                const fallbackS = getStarter();
+                                if (fallbackS) resolve(fallbackS);
+                                else reject(new Error("CDN fallback failed to register."));
+                            } catch (err) {
+                                reject(new Error("Both local and CDN engines failed to load."));
+                            }
+                        }
                     };
                     check();
                 });
 
-                const V86 = await waitForLib();
-                log("Library verified. Preparing Virtual Machine...");
+                log("Engine confirmed. Preparing Boot...");
                 document.getElementById('boot-status').innerText = "PREPARING VIRTUAL MACHINE...";
-                
                 bootVM(V86);
 
             } catch (e) {
                 log("Fatal: " + e.message);
-                term.writeln("\x1b[31m[FATAL]\x1b[0m " + e.message);
+                term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
+                term.writeln("\x1b[33m[TIP]\x1b[0m Ensure libv86.js is a valid script and not an HTML error page.");
                 document.getElementById('boot-status').innerText = "BOOT FAILED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
         }
 
         function bootVM(V86) {
-            log("Cold booting x86 environment...");
+            log("Initializing V86 instance...");
             
             emulator = new V86({
                 wasm_path: WASM_PATH,
-                memory_size: 256 * 1024 * 1024, // Bumped to 256MB for better modern performance
+                memory_size: 256 * 1024 * 1024,
                 vga_as_text_mode: true,
                 bios: { url: BIOS_IMAGE },
                 cdrom: { url: ALPINE_IMAGE },
                 autostart: true,
             });
 
-            // Status Bar Updates
             const dot = document.getElementById('connection-dot');
             const label = document.getElementById('system-label');
-            const cpuLabel = document.getElementById('cpu-load');
 
             emulator.add_listener("serial0-output-char", (char) => {
                 const overlay = document.getElementById('overlay');
@@ -272,34 +289,19 @@
                     overlay.classList.add('hidden');
                     dot.classList.add('active');
                     label.innerText = "SYSTEM ACTIVE";
-                    log("First output received. Transitioning to terminal.");
+                    log("Serial link established.");
                 }
                 term.write(char);
             });
 
             emulator.add_listener("download-error", (url) => {
                 log("Download failed: " + url);
-                term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m Failed to fetch resource: ${url}`);
+                term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m File not found or blocked: ${url}`);
             });
 
-            // Input handling
             term.onData(data => emulator.serial0_send(data));
-
-            // Resize handling
-            window.addEventListener('resize', () => {
-                fitAddon.fit();
-                log("Terminal resized.");
-            });
-
-            // Focus terminal
+            window.addEventListener('resize', () => fitAddon.fit());
             term.focus();
-            
-            // Simulation of CPU load (for visual effect)
-            setInterval(() => {
-                if (!emulator) return;
-                const loads = ["LOW", "MED", "STABLE"];
-                cpuLabel.innerText = "CPU: " + loads[Math.floor(Math.random() * loads.length)];
-            }, 3000);
         }
 
         window.onload = init;
