@@ -3,54 +3,172 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Personal Linux Terminal</title>
+    <title>Modern Web Terminal | Alpine Linux</title>
     <!-- Core UI Dependencies -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Emulator Engine - Static loading is more reliable for registering globals -->
+    <!-- Emulator Engine -->
     <script src="./libv86.js"></script>
 
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background-color: #1a1b26; overflow: hidden; }
-        #terminal-container { width: 100vw; height: 100vh; }
+        :root {
+            --bg-color: #1a1b26;
+            --header-bg: #16161e;
+            --accent-color: #7aa2f7;
+            --text-muted: #565f89;
+            --success-color: #9ce200;
+        }
+
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+            background-color: var(--bg-color); 
+            overflow: hidden; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        #app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #header {
+            background-color: var(--header-bg);
+            height: 32px;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            border-bottom: 1px solid #24283b;
+            justify-content: space-between;
+            z-index: 20;
+        }
+
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--accent-color);
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+        }
+
+        .status-dot.active {
+            background-color: var(--success-color);
+            box-shadow: 0 0 8px var(--success-color);
+        }
+
+        #terminal-container { 
+            flex: 1;
+            width: 100%;
+            background-color: var(--bg-color);
+        }
+
         #overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            color: #7aa2f7; text-align: center; z-index: 10; background: #1a1b26;
-            transition: opacity 0.5s ease;
+            position: absolute; 
+            top: 32px; 
+            left: 0; 
+            width: 100%; 
+            height: calc(100% - 32px);
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center;
+            color: var(--accent-color); 
+            text-align: center; 
+            z-index: 10; 
+            background: var(--bg-color);
+            transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
+        .loader-box {
+            background: var(--header-bg);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #24283b;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
         .spinner {
-            border: 4px solid rgba(122, 162, 247, 0.1); width: 40px; height: 40px;
-            border-radius: 50%; border-left-color: #7aa2f7; animation: spin 1s linear infinite; margin-bottom: 20px;
+            border: 3px solid rgba(122, 162, 247, 0.1); 
+            width: 32px; 
+            height: 32px;
+            border-radius: 50%; 
+            border-left-color: var(--accent-color); 
+            animation: spin 0.8s linear infinite; 
+            margin: 0 auto 20px;
         }
+
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
         .hidden { opacity: 0; pointer-events: none; }
-        #debug-log {
-            position: absolute; bottom: 10px; left: 10px; color: #565f89; 
-            font-size: 10px; text-align: left; pointer-events: none;
-            max-height: 200px; overflow-y: auto; width: 100%;
+        
+        #debug-console {
+            position: absolute; 
+            bottom: 10px; 
+            right: 10px; 
+            font-family: monospace;
+            font-size: 10px;
+            color: #414868;
+            pointer-events: none;
+            text-align: right;
         }
     </style>
 </head>
 <body>
 
+    <div id="app-container">
+        <header id="header">
+            <div class="header-section">
+                <div class="status-pill">
+                    <div id="connection-dot" class="status-dot"></div>
+                    <span id="system-label">SYSTEM OFFLINE</span>
+                </div>
+                <span style="opacity: 0.3">|</span>
+                <span>Alpine Linux x86</span>
+            </div>
+            <div class="header-section">
+                <span id="mem-usage">MEM: 256MB</span>
+                <span id="cpu-load">CPU: IDLE</span>
+            </div>
+        </header>
+
+        <div id="terminal-container"></div>
+    </div>
+
     <div id="overlay">
-        <div id="loader-content">
+        <div class="loader-box">
             <div class="spinner"></div>
-            <p id="boot-status">Initializing Web-Native Linux...</p>
+            <p id="boot-status" style="margin: 0; font-weight: 500; letter-spacing: 0.5px;">INITIALIZING CORE...</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">Loading artifacts from repository...</p>
         </div>
     </div>
 
-    <div id="terminal-container"></div>
-    <div id="debug-log"></div>
+    <div id="debug-console"></div>
 
     <script>
         /**
          * GitHub Pages Local Configuration
-         * Ensure linux.iso, seabios.bin, libv86.js, and v86.wasm
-         * are all in the same folder as this index.html file.
+         * Files must exist at root: linux.iso, seabios.bin, libv86.js, v86.wasm
          */
         const WASM_PATH = "./v86.wasm";
         const ALPINE_IMAGE = "./linux.iso";
@@ -58,123 +176,130 @@
 
         let term, fitAddon, emulator;
 
-        function logDebug(msg) {
-            console.log("%c[V86 DEBUG]", "color: #7aa2f7; font-weight: bold", msg);
-            const logDiv = document.getElementById('debug-log');
-            if (logDiv) {
-                const entry = document.createElement('div');
-                entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-                logDiv.appendChild(entry);
-                logDiv.scrollTop = logDiv.scrollHeight;
-            }
+        function log(msg) {
+            console.log(`%c[VM] ${msg}`, "color: #7aa2f7");
+            const debug = document.getElementById('debug-console');
+            const line = document.createElement('div');
+            line.textContent = `> ${msg}`;
+            debug.appendChild(line);
+            if (debug.childNodes.length > 5) debug.removeChild(debug.firstChild);
         }
 
         async function init() {
-            // 1. Setup Terminal UI
+            // 1. Terminal Setup with Tokyo Night Theme
             term = new Terminal({
                 cursorBlink: true,
-                fontFamily: '"Cascadia Code", Menlo, monospace',
+                fontFamily: '"JetBrains Mono", "Cascadia Code", Menlo, monospace',
                 fontSize: 14,
-                theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' }
+                lineHeight: 1.2,
+                theme: {
+                    background: '#1a1b26',
+                    foreground: '#a9b1d6',
+                    cursor: '#c0caf5',
+                    selectionBackground: '#33467c',
+                    black: '#15161e',
+                    red: '#f7768e',
+                    green: '#9ce200',
+                    yellow: '#e0af68',
+                    blue: '#7aa2f7',
+                    magenta: '#bb9af7',
+                    cyan: '#7dcfff',
+                    white: '#a9b1d6'
+                },
+                allowProposedApi: true
             });
+
             fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
+            term.loadAddon(new WebLinksAddon.WebLinksAddon());
+            
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            logDebug("Terminal UI initialized.");
+            log("UI Engine Ready.");
 
+            // 2. Resource Verification
             try {
-                // 2. Comprehensive check for V86Starter
-                logDebug("Verifying V86Starter variable in global scope...");
+                log("Verifying Emulator Library...");
                 
-                let checkAttempts = 0;
-                const maxAttempts = 100; // Increase polling to 10 seconds total
+                const getStarter = () => window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
                 
-                const getV86Starter = () => {
-                    return window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
-                };
-
-                const waitForV86 = new Promise((resolve, reject) => {
+                let attempts = 0;
+                const waitForLib = () => new Promise((resolve, reject) => {
                     const check = () => {
-                        const starter = getV86Starter();
-                        if (starter) {
-                            logDebug("V86Starter found and ready!");
-                            resolve(starter);
-                        } else if (checkAttempts < maxAttempts) {
-                            checkAttempts++;
-                            if (checkAttempts % 10 === 0) logDebug(`Still waiting... (${checkAttempts/10}s)`);
-                            setTimeout(check, 100);
-                        } else {
-                            reject(new Error("V86Starter failed to initialize. libv86.js might be missing or broken."));
-                        }
+                        const s = getStarter();
+                        if (s) resolve(s);
+                        else if (attempts++ < 100) setTimeout(check, 100);
+                        else reject(new Error("Emulator library (libv86.js) failed to initialize."));
                     };
                     check();
                 });
 
-                const StarterClass = await waitForV86;
-
-                logDebug("Booting VM automatically...");
-                document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
-                bootVM(StarterClass);
+                const V86 = await waitForLib();
+                log("Library verified. Preparing Virtual Machine...");
+                document.getElementById('boot-status').innerText = "PREPARING VIRTUAL MACHINE...";
+                
+                bootVM(V86);
 
             } catch (e) {
-                logDebug("CRITICAL ERROR: " + e.message);
-                term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
-                term.writeln(`\x1b[33m[Details]\x1b[0m ${e.message}`);
-                term.writeln("Check if 'libv86.js' is valid and accessible at ./libv86.js");
+                log("Fatal: " + e.message);
+                term.writeln("\x1b[31m[FATAL]\x1b[0m " + e.message);
+                document.getElementById('boot-status').innerText = "BOOT FAILED";
+                document.getElementById('boot-status').style.color = "#f7768e";
             }
         }
 
-        function bootVM(StarterClass) {
-            try {
-                logDebug("Instantiating V86Starter with provided class...");
-                
-                emulator = new StarterClass({
-                    wasm_path: WASM_PATH,
-                    memory_size: 128 * 1024 * 1024,
-                    vga_as_text_mode: true,
-                    bios: { url: BIOS_IMAGE },
-                    cdrom: { url: ALPINE_IMAGE },
-                    autostart: true,
-                });
+        function bootVM(V86) {
+            log("Cold booting x86 environment...");
+            
+            emulator = new V86({
+                wasm_path: WASM_PATH,
+                memory_size: 256 * 1024 * 1024, // Bumped to 256MB for better modern performance
+                vga_as_text_mode: true,
+                bios: { url: BIOS_IMAGE },
+                cdrom: { url: ALPINE_IMAGE },
+                autostart: true,
+            });
 
-                logDebug("V86Starter instance created.");
+            // Status Bar Updates
+            const dot = document.getElementById('connection-dot');
+            const label = document.getElementById('system-label');
+            const cpuLabel = document.getElementById('cpu-load');
 
-                emulator.add_listener("download-error", (url) => {
-                    logDebug(`Download failed for: ${url}`);
-                    term.writeln(`\x1b[31m[Error]\x1b[0m Failed to download component: ${url}`);
-                });
+            emulator.add_listener("serial0-output-char", (char) => {
+                const overlay = document.getElementById('overlay');
+                if (overlay && !overlay.classList.contains('hidden')) {
+                    overlay.classList.add('hidden');
+                    dot.classList.add('active');
+                    label.innerText = "SYSTEM ACTIVE";
+                    log("First output received. Transitioning to terminal.");
+                }
+                term.write(char);
+            });
 
-                emulator.add_listener("serial0-output-char", (char) => {
-                    const overlay = document.getElementById('overlay');
-                    if (overlay && !overlay.classList.contains('hidden')) {
-                        overlay.classList.add('hidden');
-                        logDebug("Serial output detected - VM is alive.");
-                    }
-                    term.write(char);
-                });
-                
-                term.onData((data) => {
-                    if (emulator) emulator.serial0_send(data);
-                });
+            emulator.add_listener("download-error", (url) => {
+                log("Download failed: " + url);
+                term.writeln(`\r\n\x1b[31m[IO_ERROR]\x1b[0m Failed to fetch resource: ${url}`);
+            });
 
-                window.addEventListener('resize', () => fitAddon.fit());
-                term.focus();
-                
-                // Diagnostic Watchdog
-                setTimeout(() => {
-                    const overlay = document.getElementById('overlay');
-                    if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Watchdog: No response from VM (10s). Check linux.iso/seabios.bin paths.");
-                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Waiting for output... Check console for 404s.");
-                    }
-                }, 10000);
+            // Input handling
+            term.onData(data => emulator.serial0_send(data));
 
-            } catch (err) {
-                logDebug("Exception in bootVM: " + err.message);
-                term.writeln("\x1b[31m[Error]\x1b[0m VM failed to start: " + err.message);
-            }
+            // Resize handling
+            window.addEventListener('resize', () => {
+                fitAddon.fit();
+                log("Terminal resized.");
+            });
+
+            // Focus terminal
+            term.focus();
+            
+            // Simulation of CPU load (for visual effect)
+            setInterval(() => {
+                if (!emulator) return;
+                const loads = ["LOW", "MED", "STABLE"];
+                cpuLabel.innerText = "CPU: " + loads[Math.floor(Math.random() * loads.length)];
+            }, 3000);
         }
 
         window.onload = init;
