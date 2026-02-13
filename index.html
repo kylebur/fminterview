@@ -4,9 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Personal Linux Terminal</title>
+    <!-- Core UI Dependencies -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    
+    <!-- Emulator Engine - Static loading is more reliable for registering globals -->
+    <script src="./libv86.js"></script>
+
     <style>
         body, html { margin: 0; padding: 0; height: 100%; background-color: #1a1b26; overflow: hidden; }
         #terminal-container { width: 100vw; height: 100vh; }
@@ -47,7 +52,6 @@
          * Ensure linux.iso, seabios.bin, libv86.js, and v86.wasm
          * are all in the same folder as this index.html file.
          */
-        const V86_LIB = "./libv86.js";
         const WASM_PATH = "./v86.wasm";
         const ALPINE_IMAGE = "./linux.iso";
         const BIOS_IMAGE = "./seabios.bin";
@@ -62,23 +66,8 @@
             logDiv.appendChild(entry);
         }
 
-        function loadScript(src) {
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = src;
-                script.onload = () => {
-                    logDebug(`Script file reached: ${src}`);
-                    resolve();
-                };
-                script.onerror = (err) => {
-                    logDebug(`Network error loading script: ${src}`);
-                    reject(err);
-                };
-                document.head.appendChild(script);
-            });
-        }
-
         async function init() {
+            // 1. Setup Terminal UI
             term = new Terminal({
                 cursorBlink: true,
                 fontFamily: '"Cascadia Code", Menlo, monospace',
@@ -93,26 +82,22 @@
             logDebug("Terminal UI initialized.");
 
             try {
-                logDebug("Attempting to load libv86.js...");
-                await loadScript(V86_LIB);
-                
-                // The log shows "Script loaded successfully" but V86Starter is missing immediately after.
-                // We will poll for up to 5 seconds to allow the browser to parse/execute the script.
-                logDebug("Script tag injected. Polling for V86Starter variable...");
+                // 2. Wait for V86Starter (already included via script tag)
+                logDebug("Checking for V86Starter variable...");
                 
                 let checkAttempts = 0;
-                const maxAttempts = 50; // 5 seconds total (100ms * 50)
+                const maxAttempts = 50; 
                 
                 const waitForV86 = new Promise((resolve, reject) => {
                     const check = () => {
                         if (typeof window.V86Starter !== 'undefined') {
-                            logDebug("V86Starter found in window scope!");
+                            logDebug("V86Starter found in global scope!");
                             resolve();
                         } else if (checkAttempts < maxAttempts) {
                             checkAttempts++;
                             setTimeout(check, 100);
                         } else {
-                            reject(new Error("Timeout waiting for V86Starter to initialize."));
+                            reject(new Error("Timeout: V86Starter variable never appeared. Check if libv86.js is valid."));
                         }
                     };
                     check();
@@ -120,7 +105,7 @@
 
                 await waitForV86;
 
-                logDebug("V86Starter confirmed. Starting boot sequence...");
+                logDebug("V86Starter confirmed. Booting VM automatically...");
                 document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
                 bootVM();
 
@@ -128,7 +113,7 @@
                 logDebug("CRITICAL ERROR: " + e.message);
                 term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
                 term.writeln(`\x1b[33m[Details]\x1b[0m ${e.message}`);
-                term.writeln("Check if 'libv86.js' is a valid JS file and not an HTML error page.");
+                term.writeln("Tip: Open 'libv86.js' in a text editor to make sure it contains code, not a 404 page.");
             }
         }
 
@@ -149,14 +134,14 @@
 
                 emulator.add_listener("download-error", (url) => {
                     logDebug(`Download failed for: ${url}`);
-                    term.writeln(`\x1b[31m[Error]\x1b[0m Failed to download: ${url}`);
+                    term.writeln(`\x1b[31m[Error]\x1b[0m Failed to download component: ${url}`);
                 });
 
                 emulator.add_listener("serial0-output-char", (char) => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
                         overlay.classList.add('hidden');
-                        logDebug("Guest activity detected.");
+                        logDebug("Guest OS output detected.");
                     }
                     term.write(char);
                 });
@@ -168,13 +153,12 @@
                 window.addEventListener('resize', () => fitAddon.fit());
                 term.focus();
                 
+                // Watchdog for specific failure modes
                 setTimeout(() => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Watchdog: No output from VM after 10s.");
-                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for guest response...");
-                        term.writeln("1. Check if linux.iso is actually a bootable image.");
-                        term.writeln("2. Ensure seabios.bin is present.");
+                        logDebug("Watchdog: No response from VM after 10s.");
+                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for response. Check file paths.");
                     }
                 }, 10000);
 
