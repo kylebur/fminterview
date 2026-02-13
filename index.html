@@ -69,7 +69,10 @@
             return new Promise((resolve, reject) => {
                 const script = document.createElement('script');
                 script.src = src;
-                script.onload = resolve;
+                script.onload = () => {
+                    logDebug(`Script loaded successfully: ${src}`);
+                    resolve();
+                };
                 script.onerror = (err) => {
                     logDebug(`Failed to load script: ${src}`);
                     reject(err);
@@ -97,15 +100,27 @@
                 // 2. Load v86 Library
                 logDebug("Attempting to load libv86.js...");
                 await loadScript(V86_LIB);
-                logDebug("libv86.js script loaded successfully.");
                 
-                // 3. Auto-boot VM
+                // 3. Verify V86Starter is available (polling briefly)
+                let retries = 0;
+                while (typeof V86Starter === 'undefined' && retries < 10) {
+                    logDebug("V86Starter not yet in scope, waiting...");
+                    await new Promise(r => setTimeout(r, 500));
+                    retries++;
+                }
+
+                if (typeof V86Starter === 'undefined') {
+                    throw new Error("libv86.js loaded but V86Starter variable is missing.");
+                }
+
+                logDebug("V86Starter confirmed in scope. Starting boot...");
                 document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
                 bootVM();
 
             } catch (e) {
                 logDebug("CRITICAL ERROR during initialization: " + e.message);
                 term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
+                term.writeln(`\x1b[33m[Details]\x1b[0m ${e.message}`);
                 term.writeln("Ensure 'libv86.js' is in the same folder as index.html.");
             }
         }
@@ -114,21 +129,25 @@
             try {
                 logDebug("Instantiating V86Starter...");
                 
-                // Detailed configuration for auto-boot
                 emulator = new V86Starter({
                     wasm_path: WASM_PATH,
                     memory_size: 128 * 1024 * 1024,
                     vga_as_text_mode: true,
                     bios: { url: BIOS_IMAGE },
                     cdrom: { url: ALPINE_IMAGE },
-                    autostart: true, // This starts the CPU immediately
+                    autostart: true,
                 });
 
-                logDebug("V86Starter object created. Checking for WASM load...");
+                logDebug("V86Starter object created. Checking for file loads...");
+
+                // Monitor for network/file errors
+                emulator.add_listener("download-error", (url) => {
+                    logDebug(`Download failed for: ${url}`);
+                    term.writeln(`\x1b[31m[Error]\x1b[0m Failed to download: ${url}`);
+                });
 
                 // Pipe VM output to xterm.js
                 emulator.add_listener("serial0-output-char", (char) => {
-                    // Hide overlay once the BIOS/Kernel starts sending characters
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
                         overlay.classList.add('hidden');
@@ -148,13 +167,16 @@
                 
                 term.focus();
                 
-                // Watchdog for common file loading issues
+                // Watchdog for missing files or BIOS hangs
                 setTimeout(() => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Watchdog: No output from VM after 10 seconds.");
+                        logDebug("Watchdog triggered: No output after 10s.");
                         term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for guest response...");
-                        term.writeln("Verify linux.iso and seabios.bin exist at the root of your repo.");
+                        term.writeln("Common issues:");
+                        term.writeln("1. Check Browser Console (F12) for 404 errors on .iso or .wasm");
+                        term.writeln("2. Ensure filenames are lower-case: linux.iso, v86.wasm, etc.");
+                        term.writeln("3. Refresh the page to clear browser cache.");
                     }
                 }, 10000);
 
@@ -164,7 +186,6 @@
             }
         }
 
-        // Start everything on page load
         window.onload = init;
     </script>
 </body>
