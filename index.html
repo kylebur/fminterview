@@ -171,7 +171,7 @@
                 </div>
                 <span style="opacity: 0.3">|</span>
                 <span>Alpine Linux x86</span>
-                <span class="version-tag">v1.7</span>
+                <span class="version-tag">v1.8</span>
             </div>
             <div class="header-section">
                 <span id="mem-usage">MEM: 256MB</span>
@@ -189,7 +189,7 @@
             <div id="diagnostic-list" style="margin-top: 15px; text-align: left; padding: 0 10px;">
                 <!-- Steps will be injected here -->
             </div>
-            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.7.0</p>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 20px;">Build version: 1.8.0</p>
         </div>
     </div>
 
@@ -330,7 +330,7 @@
             term.open(document.getElementById('terminal-container'));
             fitAddon.fit();
 
-            log("UI Engine Ready (Build 1.7).");
+            log("UI Engine Ready (Build 1.8).");
 
             try {
                 // 2. Pre-flight Check
@@ -373,6 +373,25 @@
                     throw new Error("V86Starter class not found in global scope after Shim injection.");
                 }
                 
+                // --- INTROSPECTION START ---
+                // Handle case where export is an object wrapping the constructor
+                log("V86 Object found. Type: " + typeof v86Class);
+                
+                if (typeof v86Class !== 'function') {
+                     log("V86 is not a function. Inspecting properties...");
+                     if (v86Class.V86Starter && typeof v86Class.V86Starter === 'function') {
+                         log("Found V86Starter inside object.");
+                         v86Class = v86Class.V86Starter;
+                     } else if (v86Class.default && typeof v86Class.default === 'function') {
+                         log("Found default export inside object.");
+                         v86Class = v86Class.default;
+                     } else {
+                         const keys = Object.keys(v86Class);
+                         log("Available keys: " + keys.join(", "));
+                     }
+                }
+                // --- INTROSPECTION END ---
+
                 updateDiagnostic("ENGINE", "READY");
                 log("Engine confirmed. Preparing Boot...");
                 document.getElementById('boot-status').innerText = "BOOTING...";
@@ -381,7 +400,7 @@
             } catch (e) {
                 log("Fatal: " + e.message);
                 term.writeln("\r\n\x1b[31m[FATAL ERROR]\x1b[0m " + e.message);
-                term.writeln("\x1b[33m[DEBUG]\x1b[0m Ensure Build version 1.7.0 is displayed on screen.");
+                term.writeln("\x1b[33m[DEBUG]\x1b[0m Ensure Build version 1.8.0 is displayed on screen.");
                 document.getElementById('boot-status').innerText = "STOPPED";
                 document.getElementById('boot-status').style.color = "#f7768e";
             }
@@ -389,6 +408,11 @@
 
         function bootVM(V86Class) {
             try {
+                // Final safety check before instantiation
+                if (typeof V86Class !== 'function') {
+                    throw new Error("Resolved V86 object is still not a constructor. Check logs.");
+                }
+
                 emulator = new V86Class({
                     wasm_path: REQUIRED_FILES.WASM,
                     memory_size: 256 * 1024 * 1024,
