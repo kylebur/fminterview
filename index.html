@@ -61,9 +61,12 @@
         function logDebug(msg) {
             console.log("%c[V86 DEBUG]", "color: #7aa2f7; font-weight: bold", msg);
             const logDiv = document.getElementById('debug-log');
-            const entry = document.createElement('div');
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            logDiv.appendChild(entry);
+            if (logDiv) {
+                const entry = document.createElement('div');
+                entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                logDiv.appendChild(entry);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
         }
 
         async function init() {
@@ -82,46 +85,52 @@
             logDebug("Terminal UI initialized.");
 
             try {
-                // 2. Wait for V86Starter (already included via script tag)
-                logDebug("Checking for V86Starter variable...");
+                // 2. Comprehensive check for V86Starter
+                logDebug("Verifying V86Starter variable in global scope...");
                 
                 let checkAttempts = 0;
-                const maxAttempts = 50; 
+                const maxAttempts = 100; // Increase polling to 10 seconds total
                 
+                const getV86Starter = () => {
+                    return window.V86Starter || (typeof V86Starter !== 'undefined' ? V86Starter : null);
+                };
+
                 const waitForV86 = new Promise((resolve, reject) => {
                     const check = () => {
-                        if (typeof window.V86Starter !== 'undefined') {
-                            logDebug("V86Starter found in global scope!");
-                            resolve();
+                        const starter = getV86Starter();
+                        if (starter) {
+                            logDebug("V86Starter found and ready!");
+                            resolve(starter);
                         } else if (checkAttempts < maxAttempts) {
                             checkAttempts++;
+                            if (checkAttempts % 10 === 0) logDebug(`Still waiting... (${checkAttempts/10}s)`);
                             setTimeout(check, 100);
                         } else {
-                            reject(new Error("Timeout: V86Starter variable never appeared. Check if libv86.js is valid."));
+                            reject(new Error("V86Starter failed to initialize. libv86.js might be missing or broken."));
                         }
                     };
                     check();
                 });
 
-                await waitForV86;
+                const StarterClass = await waitForV86;
 
-                logDebug("V86Starter confirmed. Booting VM automatically...");
+                logDebug("Booting VM automatically...");
                 document.getElementById('boot-status').innerText = "Booting Virtual Machine...";
-                bootVM();
+                bootVM(StarterClass);
 
             } catch (e) {
                 logDebug("CRITICAL ERROR: " + e.message);
                 term.writeln("\x1b[31m[Error]\x1b[0m Failed to initialize emulator engine.");
                 term.writeln(`\x1b[33m[Details]\x1b[0m ${e.message}`);
-                term.writeln("Tip: Open 'libv86.js' in a text editor to make sure it contains code, not a 404 page.");
+                term.writeln("Check if 'libv86.js' is valid and accessible at ./libv86.js");
             }
         }
 
-        function bootVM() {
+        function bootVM(StarterClass) {
             try {
-                logDebug("Instantiating V86Starter...");
+                logDebug("Instantiating V86Starter with provided class...");
                 
-                emulator = new window.V86Starter({
+                emulator = new StarterClass({
                     wasm_path: WASM_PATH,
                     memory_size: 128 * 1024 * 1024,
                     vga_as_text_mode: true,
@@ -130,7 +139,7 @@
                     autostart: true,
                 });
 
-                logDebug("V86Starter object created successfully.");
+                logDebug("V86Starter instance created.");
 
                 emulator.add_listener("download-error", (url) => {
                     logDebug(`Download failed for: ${url}`);
@@ -141,7 +150,7 @@
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
                         overlay.classList.add('hidden');
-                        logDebug("Guest OS output detected.");
+                        logDebug("Serial output detected - VM is alive.");
                     }
                     term.write(char);
                 });
@@ -153,12 +162,12 @@
                 window.addEventListener('resize', () => fitAddon.fit());
                 term.focus();
                 
-                // Watchdog for specific failure modes
+                // Diagnostic Watchdog
                 setTimeout(() => {
                     const overlay = document.getElementById('overlay');
                     if (overlay && !overlay.classList.contains('hidden')) {
-                        logDebug("Watchdog: No response from VM after 10s.");
-                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Still waiting for response. Check file paths.");
+                        logDebug("Watchdog: No response from VM (10s). Check linux.iso/seabios.bin paths.");
+                        term.writeln("\x1b[33m[Diagnostic]\x1b[0m Waiting for output... Check console for 404s.");
                     }
                 }, 10000);
 
