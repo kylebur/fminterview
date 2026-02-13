@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web-Native Alpine Linux</title>
+    <!-- Xterm.js for the terminal UI -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background-color: #1a1b26;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #terminal-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #7aa2f7;
+            text-align: center;
+            z-index: 10;
+            background: #1a1b26;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            border: 4px solid rgba(122, 162, 247, 0.1);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border-left-color: #7aa2f7;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        button {
+            background: #7aa2f7;
+            color: #1a1b26;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 15px;
+            font-size: 16px;
+        }
+        button:hover { background: #89ddff; }
+        button:disabled { background: #414868; cursor: not-allowed; }
+        .hidden { opacity: 0; pointer-events: none; }
+        #debug-console {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: 10px;
+            color: #565f89;
+            text-align: left;
+            pointer-events: none;
+            max-height: 100px;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <div id="loader-content">
+            <div class="spinner"></div>
+            <p id="status-text">Loading v86 Emulator Engine...</p>
+        </div>
+        <div id="action-content" style="display: none;">
+            <p>Ready to boot Alpine Linux</p>
+            <button id="start-btn">Start Linux Session</button>
+        </div>
+    </div>
+
+    <div id="terminal-container"></div>
+    <div id="debug-console"></div>
+
+    <script>
+        // Configuration - Using JSDelivr for better CORS/reliability
+        const V86_LIB = "https://cdn.jsdelivr.net/npm/v86@0.10.2/build/libv86.js";
+        const WASM_PATH = "https://cdn.jsdelivr.net/npm/v86@0.10.2/build/v86.wasm";
+        
+        // OS Images (Keeping copy.sh as they host the specific Alpine builds)
+        const ALPINE_IMAGE = "https://copy.sh/v86/images/alpine.iso";
+        const BIOS_IMAGE = "https://copy.sh/v86/bios/seabios.bin";
+
+        let term, fitAddon, emulator;
+
+        function logDebug(msg) {
+            const div = document.getElementById('debug-console');
+            const entry = document.createElement('div');
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            div.appendChild(entry);
+            console.log(msg);
+        }
+
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.async = true;
+                script.crossOrigin = "anonymous";
+                script.onload = () => {
+                    logDebug("Successfully loaded: " + src);
+                    resolve();
+                };
+                script.onerror = () => {
+                    logDebug("Failed to load script: " + src);
+                    reject(new Error("Network error while loading " + src));
+                };
+                document.head.appendChild(script);
+            });
+        }
+
+        async function init() {
+            const status = document.getElementById('status-text');
+            const startBtn = document.getElementById('start-btn');
+            const loaderContent = document.getElementById('loader-content');
+            const actionContent = document.getElementById('action-content');
+
+            try {
+                // 1. Setup Terminal UI
+                term = new Terminal({
+                    cursorBlink: true,
+                    fontFamily: '"Cascadia Code", Menlo, monospace',
+                    fontSize: 14,
+                    theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' }
+                });
+                fitAddon = new FitAddon.FitAddon();
+                term.loadAddon(fitAddon);
+                term.open(document.getElementById('terminal-container'));
+                fitAddon.fit();
+                
+                term.writeln("\x1b[34m[System]\x1b[0m Terminal UI initialized.");
+
+                // 2. Load the Library with fallback check
+                status.innerText = "Fetching emulator components...";
+                await loadScript(V86_LIB);
+                
+                // Extra check for global variable
+                if (typeof V86Starter === 'undefined') {
+                    throw new Error("Library loaded but V86Starter is missing from scope.");
+                }
+
+                term.writeln("\x1b[34m[System]\x1b[0m Emulator engine loaded successfully.");
+                
+                loaderContent.style.display = 'none';
+                actionContent.style.display = 'block';
+
+                startBtn.onclick = () => {
+                    startBtn.disabled = true;
+                    startBtn.innerText = "Booting...";
+                    bootVM();
+                };
+
+            } catch (e) {
+                logDebug("Error: " + e.message);
+                status.innerText = "Library load failed. Browser security might be blocking the CDN.";
+                term.writeln("\x1b[31m[Critical Error]\x1b[0m " + e.message);
+            }
+        }
+
+        function bootVM() {
+            logDebug("Initializing VM...");
+            try {
+                emulator = new V86Starter({
+                    wasm_path: WASM_PATH,
+                    memory_size: 128 * 1024 * 1024,
+                    vga_as_text_mode: true,
+                    bios: { url: BIOS_IMAGE },
+                    cdrom: { url: ALPINE_IMAGE },
+                    autostart: true,
+                });
+
+                emulator.add_listener("serial0-output-char", function(char) {
+                    term.write(char);
+                    // Hide overlay once boot sequence starts
+                    const overlay = document.getElementById('overlay');
+                    if (!overlay.classList.contains('hidden')) {
+                        overlay.classList.add('hidden');
+                        logDebug("Guest OS responding. Interface active.");
+                    }
+                });
+
+                term.onData((data) => {
+                    if (emulator) emulator.serial0_send(data);
+                });
+
+                window.addEventListener('resize', () => {
+                    fitAddon.fit();
+                });
+                
+                term.focus();
+                logDebug("VM object created.");
+
+            } catch (err) {
+                logDebug("Boot failure: " + err.message);
+                term.writeln("\x1b[31m[Error]\x1b[0m Boot failed: " + err.message);
+            }
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
